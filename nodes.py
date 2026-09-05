@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import copy
 import json
+import sys
 import threading
 import time
 import urllib.error
@@ -46,6 +47,33 @@ class _LoopState:
 
 _STATE_LOCK = threading.Lock()
 _STATE = _LoopState()
+
+
+def _get_local_api_url() -> str:
+    """Detect ComfyUI API base URL from startup args.
+
+    Supports both argument styles:
+    - --port 6006
+    - --port=6006
+
+    Falls back to ComfyUI default 8188 when parsing fails.
+    """
+    port = 8188
+    argv = sys.argv
+
+    for i, arg in enumerate(argv):
+        if arg == "--port" and i + 1 < len(argv):
+            try:
+                port = int(argv[i + 1])
+            except (TypeError, ValueError):
+                pass
+        elif arg.startswith("--port="):
+            try:
+                port = int(arg.split("=", maxsplit=1)[1])
+            except (TypeError, ValueError):
+                pass
+
+    return f"http://127.0.0.1:{port}"
 
 
 def _contains_auto_loop_marker(extra_pnginfo: Any) -> bool:
@@ -274,8 +302,9 @@ class LoopTriggerNode:
         }
 
         data = json.dumps(payload).encode("utf-8")
+        api_url = f"{_get_local_api_url()}/prompt"
         request = urllib.request.Request(
-            url="http://127.0.0.1:8188/prompt",
+            url=api_url,
             data=data,
             method="POST",
             headers={"Content-Type": "application/json"},
@@ -287,8 +316,8 @@ class LoopTriggerNode:
                 response.read()
         except urllib.error.URLError as exc:
             raise RuntimeError(
-                "❌ 自动排队失败：无法连接 ComfyUI API (/prompt)。"
-                " / Auto-queue failed: cannot reach ComfyUI /prompt API."
+                f"❌ 自动排队失败：无法连接 ComfyUI API ({api_url})。"
+                f" / Auto-queue failed: cannot reach ComfyUI API ({api_url})."
             ) from exc
 
     @classmethod
@@ -330,7 +359,19 @@ class LoopTriggerNode:
         else:
             progress_text = f"✅ Finished: {completed} / {total}"
 
-        return {"ui": {"text": [progress_text]}, "result": ()}
+        return {
+            "ui": {
+                "text": [progress_text],
+                "progress": [
+                    {
+                        "completed": completed,
+                        "total": total,
+                        "done": not should_continue,
+                    }
+                ],
+            },
+            "result": (),
+        }
 
 
 NODE_CLASS_MAPPINGS = {
