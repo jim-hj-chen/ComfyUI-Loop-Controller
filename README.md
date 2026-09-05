@@ -1,0 +1,153 @@
+# ComfyUI-Loop-Controller（循环控制器）
+
+一个用于 ComfyUI 的“基于序列排队的无人值守循环批处理”插件。  
+核心思路是：**不用 Python `for` 一次性跑完，而是每轮结束后自动向 ComfyUI 再排一条队列任务**，从而获得更稳定、可中断、可追踪的循环执行体验。
+
+---
+
+## 功能特性
+
+- 纯净序列排队：每次只执行当前一轮，尾节点自动触发下一轮排队。
+- 隐式状态共享：`Loop Start` 写入内存状态，`Loop Trigger` 读取，无需拉长线。
+- Fail-Fast：`List Item Extractor` 越界直接报错中断，避免错位数据继续流转。
+- 中英双语 UI：节点标题与关键输入标签双语显示。
+- 进度实时反馈：触发节点面板显示 `Progress: x / total` 或 `✅ Finished: total / total`。
+
+---
+
+## 目录结构
+
+```text
+comfyui-loop-controller/
+├─ __init__.py
+├─ nodes.py
+└─ web/
+   └─ loop_controller.js
+```
+
+---
+
+## 安装方式
+
+1. 将本插件目录放入 ComfyUI 的自定义节点目录：
+   - `ComfyUI/custom_nodes/comfyui-loop-controller`
+2. 重启 ComfyUI。
+3. 在节点分类中找到：`Loop Controller`。
+
+---
+
+## 节点说明
+
+### 1) Loop Start / 循环起始
+
+**作用**：循环时钟引擎，产出当前轮次序号。
+
+**输入**
+- `total` (`INT`)：总轮次，默认 `10`，范围 `1 ~ 100000`
+- `start_index` (`INT`)：手动 Queue 时的起始序号，默认 `0`
+
+**隐藏输入**
+- `extra_pnginfo`：用于识别是否为自动循环请求（`is_auto_loop`）
+
+**输出**
+- `index` (`INT`)：当前轮次序号
+
+**机制**
+- 自动排队触发：`current_index += 1`
+- 手动点击 Queue：`current_index = start_index`
+- 同时写入共享状态：`current_index` 与 `total`
+
+---
+
+### 2) List Item Extractor / 列表项提取器
+
+**作用**：按序号提取任意类型列表中的单个元素。
+
+**输入**
+- `index` (`INT`)：来自 `Loop Start` 的当前序号
+- `list` (`*`)：任意类型输入（文本、列表、批量对象等）
+
+**输出**
+- `item` (`*`)：提取出的单个元素
+
+**机制**
+- 多行字符串会自动按 `\n` 拆分并去掉空行
+- `list/tuple` 保持列表语义
+- 非列表输入会转为单元素列表兜底
+
+**Fail-Fast**
+- 空列表：抛 `ValueError`
+- 索引越界：抛 `IndexError`
+  - 示例：`❌ 索引越界！要求获取第 X 个，但列表总共只有 Y 个`
+
+---
+
+### 3) Loop Trigger / 循环触发器
+
+**作用**：流程末端控制节点，判断是否继续并自动排队下一轮。
+
+**输入**
+- `any` (`*`)：执行依赖输入（用于控制执行顺序）
+
+**隐藏输入**
+- `prompt`：当前完整工作流数据
+- `client_id`：当前客户端 ID
+
+**输出**
+- 无数据输出（该节点为 `OUTPUT_NODE = True`）
+
+**机制**
+- 读取共享状态中的 `current_index` 与 `total`
+- 若 `current_index + 1 < total`：
+  - 构造新的请求
+  - 注入 `extra_data.extra_pnginfo.is_auto_loop = true`
+  - POST 到 `http://127.0.0.1:8188/prompt` 自动继续排队
+- 返回 UI 文本更新：
+  - 进行中：`Progress: x / total`
+  - 完成：`✅ Finished: total / total`
+
+---
+
+## 推荐连线方式
+
+典型链路如下（示例）：
+
+1. `Loop Start.index` -> `List Item Extractor.index`
+2. 你的数据源（如多行文本） -> `List Item Extractor.list`
+3. `List Item Extractor.item` -> 下游生成节点
+4. 最终保存/输出节点 -> `Loop Trigger.any`
+
+> 建议将 `Loop Trigger` 放在工作流最末端，确保每轮真正完成后再触发下一轮。
+
+---
+
+## 常见问题
+
+### Q1: 为什么没有继续自动排队？
+
+- 检查 `Loop Trigger` 是否在末端并且实际被执行。
+- 检查 ComfyUI API 地址是否可用（默认 `127.0.0.1:8188`）。
+- 查看是否出现了上游异常（例如提取器越界）。
+
+### Q2: 为什么会越界报错？
+
+- 这是设计行为（Fail-Fast）。
+- 例如你设置 `total=20`，但实际列表仅 10 项，当 index 到 10 后就会报错并停止，防止错位生成。
+
+### Q3: 手动点击 Queue 后 index 为什么重置？
+
+- 手动 Queue 被视为“新一轮任务入口”，`Loop Start` 会将 `current_index` 设为 `start_index`。
+
+---
+
+## 设计原则
+
+- 不使用单次长循环，避免中间崩溃导致整批失控。
+- 状态显式可控、执行顺序可控、错误快速暴露。
+- 优先稳定性与可维护性，而非静默容错。
+
+---
+
+## 许可
+
+可按你的项目需要补充许可证（如 MIT）。
