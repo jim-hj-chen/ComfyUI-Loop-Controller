@@ -1,66 +1,104 @@
-import { app } from "../../scripts/app.js";
+import { app } from "/scripts/app.js";
+import { ComfyWidgets } from "/scripts/widgets.js";
 
 const NODE_UI = {
   "Loop Start": {
-    title: "Loop Start / 循环起始",
-    size: [360, 210],
+    size: [320, 180],
     color: "#295f8f",
     bgcolor: "#1f3f5d",
-    widgetLabels: {
-      total: "total / 总次数",
-      start_index: "start_index / 起始序号",
-    },
   },
   "List Item Extractor": {
-    title: "List Item Extractor / 列表项提取器",
-    size: [380, 210],
+    size: [340, 180],
     color: "#2f7f5f",
     bgcolor: "#1f4f3c",
-    widgetLabels: {
-      index: "index / 序号",
-    },
-    inputLabels: {
-      list: "list / 列表",
-    },
   },
   "Loop Trigger": {
-    title: "Loop Trigger / 循环触发器",
-    size: [360, 180],
+    size: [340, 200],
     color: "#875f26",
     bgcolor: "#5f3f18",
-    inputLabels: {
-      any: "any / 执行依赖",
-    },
   },
 };
 
-function applyBilingualUi(node, cfg) {
-  node.title = cfg.title;
-  node.size = cfg.size.slice();
-  node.color = cfg.color;
-  node.bgcolor = cfg.bgcolor;
-
-  if (cfg.widgetLabels && Array.isArray(node.widgets)) {
-    for (const w of node.widgets) {
-      const label = cfg.widgetLabels[w.name];
-      if (label) {
-        w.label = label;
-      }
+function getComfyLocale() {
+  try {
+    const fromSettings = app.ui?.settings?.getSettingValue?.("Comfy.Locale");
+    if (fromSettings) {
+      return String(fromSettings);
     }
+  } catch {
+    // Fall through to localStorage / navigator.
   }
 
-  if (cfg.inputLabels && Array.isArray(node.inputs)) {
-    for (const input of node.inputs) {
-      const label = cfg.inputLabels[input.name];
-      if (label) {
-        input.label = label;
-      }
+  try {
+    const stored = localStorage.getItem("Comfy.Settings.Comfy.Locale");
+    if (stored) {
+      return String(JSON.parse(stored));
     }
+  } catch {
+    // Ignore malformed locale storage.
   }
+
+  return navigator.language || "en";
+}
+
+function isChineseLocale() {
+  return getComfyLocale().toLowerCase().startsWith("zh");
+}
+
+function getProgressTextFromMessage(message) {
+  if (!message?.text || !Array.isArray(message.text) || message.text.length === 0) {
+    return "";
+  }
+  const text = message.text[0];
+  return typeof text === "string" ? text : String(text ?? "");
+}
+
+function localizeProgressText(text) {
+  if (!isChineseLocale()) return text;
+
+  const runningMatch = text.match(/^Progress:\s*(\d+)\s*\/\s*(\d+)$/);
+  if (runningMatch) {
+    return `进度：${runningMatch[1]} / ${runningMatch[2]}`;
+  }
+
+  const finishedMatch = text.match(/^✅\s*Finished:\s*(\d+)\s*\/\s*(\d+)$/);
+  if (finishedMatch) {
+    return `✅ 已完成：${finishedMatch[1]} / ${finishedMatch[2]}`;
+  }
+
+  return text;
+}
+
+function ensureProgressWidget(node) {
+  if (node._loopProgressWidget) return node._loopProgressWidget;
+
+  const widgetPack = ComfyWidgets.STRING(
+    node,
+    "progress",
+    ["STRING", { multiline: true, default: "" }],
+    app
+  );
+  const widget = widgetPack.widget;
+  widget.label = isChineseLocale() ? "进度" : "progress";
+  widget.inputEl.readOnly = true;
+  widget.inputEl.style.opacity = "0.85";
+  widget.inputEl.style.fontSize = "12px";
+  widget.inputEl.style.minHeight = "56px";
+  node._loopProgressWidget = widget;
+  node.onResize?.(node.size);
+  return widget;
+}
+
+function applyProgress(node, message) {
+  const progressText = getProgressTextFromMessage(message);
+  if (!progressText) return;
+  const widget = ensureProgressWidget(node);
+  widget.value = localizeProgressText(progressText);
+  node.onResize?.(node.size);
 }
 
 app.registerExtension({
-  name: "comfyui.loop.controller.bilingual_ui",
+  name: "comfyui.loop.controller.ui",
   beforeRegisterNodeDef(nodeType, nodeData) {
     const cfg = NODE_UI[nodeData.name];
     if (!cfg) return;
@@ -68,8 +106,23 @@ app.registerExtension({
     const onNodeCreated = nodeType.prototype.onNodeCreated;
     nodeType.prototype.onNodeCreated = function () {
       const result = onNodeCreated?.apply(this, arguments);
-      applyBilingualUi(this, cfg);
+      this.size = cfg.size.slice();
+      this.color = cfg.color;
+      this.bgcolor = cfg.bgcolor;
+
+      if (nodeData.name === "Loop Trigger") {
+        ensureProgressWidget(this);
+      }
+
       return result;
     };
+
+    if (nodeData.name === "Loop Trigger") {
+      const onExecuted = nodeType.prototype.onExecuted;
+      nodeType.prototype.onExecuted = function (message) {
+        onExecuted?.apply(this, arguments);
+        applyProgress(this, message);
+      };
+    }
   },
 });

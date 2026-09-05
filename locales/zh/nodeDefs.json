@@ -1,0 +1,52 @@
+{
+  "Loop Start": {
+    "display_name": "循环起始",
+    "description": "队列循环的时钟引擎。将 current_index 与 total 写入共享内存，供循环触发器读取。",
+    "inputs": {
+      "total": {
+        "name": "总次数",
+        "tooltip": "循环的总次数"
+      },
+      "start_index": {
+        "name": "起始序号",
+        "tooltip": "手动点击 Queue 时使用的起始序号"
+      }
+    },
+    "outputs": {
+      "0": {
+        "name": "序号",
+        "tooltip": "当前循环序号"
+      }
+    }
+  },
+  "List Item Extractor": {
+    "display_name": "列表项提取器",
+    "description": "按序号从列表中提取一项。列表为空或索引越界时立即报错中断。",
+    "inputs": {
+      "index": {
+        "name": "序号",
+        "tooltip": "来自循环起始节点的序号"
+      },
+      "list": {
+        "name": "列表",
+        "tooltip": "任意列表类输入，也支持多行文本"
+      }
+    },
+    "outputs": {
+      "0": {
+        "name": "条目",
+        "tooltip": "提取出的单条数据"
+      }
+    }
+  },
+  "Loop Trigger": {
+    "display_name": "循环触发器",
+    "description": "工作流末端触发器。在 current_index + 1 未达到 total 时自动再次排队，并在节点面板显示进度。",
+    "inputs": {
+      "any": {
+        "name": "任意",
+        "tooltip": "通常连接自保存节点的输出"
+      }
+    }
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "Loop Start": {
+    "display_name": "Loop Start",
+    "description": "Clock engine for queue-based looping. Writes current_index and total into shared memory for Loop Trigger.",
+    "inputs": {
+      "total": {
+        "name": "total",
+        "tooltip": "Total number of loop iterations"
+      },
+      "start_index": {
+        "name": "start_index",
+        "tooltip": "Starting index used when you manually click Queue"
+      }
+    },
+    "outputs": {
+      "0": {
+        "name": "index",
+        "tooltip": "Current loop index"
+      }
+    }
+  },
+  "List Item Extractor": {
+    "display_name": "List Item Extractor",
+    "description": "Extracts one item from a list by index. Raises immediately on empty lists or out-of-range indexes.",
+    "inputs": {
+      "index": {
+        "name": "index",
+        "tooltip": "Index from Loop Start"
+      },
+      "list": {
+        "name": "list",
+        "tooltip": "Any list-like input, including multiline text"
+      }
+    },
+    "outputs": {
+      "0": {
+        "name": "item",
+        "tooltip": "The extracted item"
+      }
+    }
+  },
+  "Loop Trigger": {
+    "display_name": "Loop Trigger",
+    "description": "End-of-graph trigger. Re-queues the workflow until current_index + 1 reaches total, and reports progress in the node panel.",
+    "inputs": {
+      "any": {
+        "name": "any",
+        "tooltip": "Execution dependency, usually connected from a Save node"
+      }
+    }
+  }
+}

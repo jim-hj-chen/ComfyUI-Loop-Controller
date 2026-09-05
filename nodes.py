@@ -11,6 +11,7 @@ from __future__ import annotations
 import copy
 import json
 import threading
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -117,13 +118,35 @@ class LoopStartNode:
     FUNCTION = "run"
     RETURN_TYPES = ("INT",)
     RETURN_NAMES = ("index",)
+    DESCRIPTION = (
+        "Clock engine for queue-based looping. Writes current_index and total "
+        "into shared memory for Loop Trigger."
+    )
 
     @classmethod
     def INPUT_TYPES(cls) -> Dict[str, Dict[str, Any]]:
         return {
             "required": {
-                "total": ("INT", {"default": 10, "min": 1, "max": 100000, "step": 1}),
-                "start_index": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
+                "total": (
+                    "INT",
+                    {
+                        "default": 10,
+                        "min": 1,
+                        "max": 100000,
+                        "step": 1,
+                        "tooltip": "Total number of loop iterations",
+                    },
+                ),
+                "start_index": (
+                    "INT",
+                    {
+                        "default": 0,
+                        "min": 0,
+                        "max": 100000,
+                        "step": 1,
+                        "tooltip": "Starting index used when you manually click Queue",
+                    },
+                ),
             },
             "hidden": {
                 "extra_pnginfo": "EXTRA_PNGINFO",
@@ -154,13 +177,31 @@ class ListItemExtractorNode:
     FUNCTION = "extract"
     RETURN_TYPES = (ANY,)
     RETURN_NAMES = ("item",)
+    DESCRIPTION = (
+        "Extracts one item from a list by index. Raises immediately on empty "
+        "lists or out-of-range indexes."
+    )
 
     @classmethod
     def INPUT_TYPES(cls) -> Dict[str, Dict[str, Any]]:
         return {
             "required": {
-                "index": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
-                "list": (ANY,),
+                "index": (
+                    "INT",
+                    {
+                        "default": 0,
+                        "min": 0,
+                        "max": 100000,
+                        "step": 1,
+                        "tooltip": "Index from Loop Start",
+                    },
+                ),
+                "list": (
+                    ANY,
+                    {
+                        "tooltip": "Any list-like input, including multiline text",
+                    },
+                ),
             }
         }
 
@@ -191,29 +232,44 @@ class LoopTriggerNode:
     FUNCTION = "trigger"
     RETURN_TYPES = ()
     OUTPUT_NODE = True
+    DESCRIPTION = (
+        "End-of-graph trigger. Re-queues the workflow until current_index + 1 "
+        "reaches total, and reports progress in the node panel."
+    )
 
     @classmethod
     def INPUT_TYPES(cls) -> Dict[str, Dict[str, Any]]:
         return {
             "required": {
-                "any": (ANY,),
+                "any": (
+                    ANY,
+                    {
+                        "tooltip": "Execution dependency, usually connected from a Save node",
+                    },
+                ),
             },
             "hidden": {
                 "prompt": "PROMPT",
                 "client_id": "UNIQUE_ID",
+                "extra_pnginfo": "EXTRA_PNGINFO",
             },
         }
 
     @staticmethod
-    def _queue_next(prompt: Dict[str, Any], client_id: str | None):
+    def _queue_next(prompt: Dict[str, Any], client_id: str | None, extra_pnginfo: Any):
         # Keep graph data untouched and only augment API payload metadata.
+        next_extra_pnginfo: Dict[str, Any]
+        if isinstance(extra_pnginfo, dict):
+            next_extra_pnginfo = copy.deepcopy(extra_pnginfo)
+        else:
+            next_extra_pnginfo = {}
+        next_extra_pnginfo["is_auto_loop"] = True
+
         payload = {
             "prompt": copy.deepcopy(prompt),
             "client_id": client_id,
             "extra_data": {
-                "extra_pnginfo": {
-                    "is_auto_loop": True,
-                }
+                "extra_pnginfo": next_extra_pnginfo
             },
         }
 
@@ -235,11 +291,17 @@ class LoopTriggerNode:
                 " / Auto-queue failed: cannot reach ComfyUI /prompt API."
             ) from exc
 
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):  # pylint: disable=unused-argument
+        # Force this output node to run every queued prompt execution.
+        return time.time()
+
     def trigger(
         self,
         any: Any,  # pylint: disable=unused-argument,redefined-builtin
         prompt: Dict[str, Any] | None = None,
         client_id: str | None = None,
+        extra_pnginfo: Any = None,
     ):
         with _STATE_LOCK:
             current_index = _STATE.current_index
@@ -261,7 +323,9 @@ class LoopTriggerNode:
                     "❌ 自动排队失败：缺少有效的 prompt 数据。 / "
                     "Auto-queue failed: missing valid prompt payload."
                 )
-            self._queue_next(prompt=prompt, client_id=client_id)
+            self._queue_next(
+                prompt=prompt, client_id=client_id, extra_pnginfo=extra_pnginfo
+            )
             progress_text = f"Progress: {completed} / {total}"
         else:
             progress_text = f"✅ Finished: {completed} / {total}"
@@ -275,8 +339,9 @@ NODE_CLASS_MAPPINGS = {
     "Loop Trigger": LoopTriggerNode,
 }
 
+# English source names. Chinese UI strings live in locales/zh/.
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "Loop Start": "Loop Start / 循环起始",
-    "List Item Extractor": "List Item Extractor / 列表项提取器",
-    "Loop Trigger": "Loop Trigger / 循环触发器",
+    "Loop Start": "Loop Start",
+    "List Item Extractor": "List Item Extractor",
+    "Loop Trigger": "Loop Trigger",
 }

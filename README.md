@@ -10,8 +10,8 @@
 - 纯净序列排队：每次只执行当前一轮，尾节点自动触发下一轮排队。
 - 隐式状态共享：`Loop Start` 写入内存状态，`Loop Trigger` 读取，无需拉长线。
 - Fail-Fast：`List Item Extractor` 越界直接报错中断，避免错位数据继续流转。
-- 中英双语 UI：节点标题与关键输入标签双语显示。
-- 进度实时反馈：触发节点面板显示 `Progress: x / total` 或 `✅ Finished: total / total`。
+- 跟随 ComfyUI 界面语言：节点名称、分类、输入输出与提示会随语言设置切换（英文 / 简体中文），不会在同一节点上并排显示中英。
+- 进度实时反馈：触发节点面板按当前语言显示进度，例如 `Progress: 1 / 10` 或 `进度：1 / 10`。
 
 ---
 
@@ -21,6 +21,13 @@
 comfyui-loop-controller/
 ├─ __init__.py
 ├─ nodes.py
+├─ locales/
+│  ├─ en/
+│  │  ├─ main.json
+│  │  └─ nodeDefs.json
+│  └─ zh/
+│     ├─ main.json
+│     └─ nodeDefs.json
 └─ web/
    └─ loop_controller.js
 ```
@@ -32,13 +39,17 @@ comfyui-loop-controller/
 1. 将本插件目录放入 ComfyUI 的自定义节点目录：
    - `ComfyUI/custom_nodes/comfyui-loop-controller`
 2. 重启 ComfyUI。
-3. 在节点分类中找到：`Loop Controller`。
+3. 在节点分类中找到：
+   - 英文界面：`Loop Controller`
+   - 中文界面：`循环控制器`
+
+界面语言由 ComfyUI 设置决定（Settings → Locale / 语言）。切换语言后刷新页面即可看到对应文案。
 
 ---
 
 ## 节点说明
 
-### 1) Loop Start / 循环起始
+### 1) Loop Start（中文：循环起始）
 
 **作用**：循环时钟引擎，产出当前轮次序号。
 
@@ -59,7 +70,7 @@ comfyui-loop-controller/
 
 ---
 
-### 2) List Item Extractor / 列表项提取器
+### 2) List Item Extractor（中文：列表项提取器）
 
 **作用**：按序号提取任意类型列表中的单个元素。
 
@@ -82,12 +93,12 @@ comfyui-loop-controller/
 
 ---
 
-### 3) Loop Trigger / 循环触发器
+### 3) Loop Trigger（中文：循环触发器）
 
 **作用**：流程末端控制节点，判断是否继续并自动排队下一轮。
 
 **输入**
-- `any` (`*`)：执行依赖输入（用于控制执行顺序）
+- `any` (`*`)：用于控制执行顺序，通常连接保存节点的输出
 
 **隐藏输入**
 - `prompt`：当前完整工作流数据
@@ -102,9 +113,10 @@ comfyui-loop-controller/
   - 构造新的请求
   - 注入 `extra_data.extra_pnginfo.is_auto_loop = true`
   - POST 到 `http://127.0.0.1:8188/prompt` 自动继续排队
-- 返回 UI 文本更新：
-  - 进行中：`Progress: x / total`
-  - 完成：`✅ Finished: total / total`
+- 后端返回 `ui.text` 进度文本，前端在中文界面自动本地化显示：
+  - 英文进行中：`Progress: x / total`
+  - 中文进行中：`进度：x / total`
+  - 完成后分别显示 `✅ Finished` / `✅ 已完成`
 
 ---
 
