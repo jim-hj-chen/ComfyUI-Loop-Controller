@@ -1,7 +1,7 @@
 {
   "Loop Start": {
     "display_name": "循环起始",
-    "description": "队列循环的时钟引擎。将 current_index 与 total 写入共享内存，供循环触发器读取。",
+    "description": "队列循环的时钟引擎。自动循环时从请求元数据读取 next_index；手动 Queue 时使用起始序号。并将 current_index/total/session 写入共享状态供触发器读取。",
     "inputs": {
       "total": {
         "name": "总次数",
@@ -41,7 +41,7 @@
   },
   "Loop Trigger": {
     "display_name": "循环触发器",
-    "description": "工作流末端触发器。在 current_index + 1 未达到 total 时自动再次排队，并在节点面板显示进度。",
+    "description": "工作流末端触发器。在 current_index + 1 未达到 total 时自动再次排队，并在元数据写入 next_index/total/session；同轮次重复触发会防重。节点面板显示进度。",
     "inputs": {
       "any": {
         "name": "任意",

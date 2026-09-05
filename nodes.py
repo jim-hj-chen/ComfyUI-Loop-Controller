@@ -15,6 +15,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List
 
@@ -43,10 +44,13 @@ class _LoopState:
 
     current_index: int = 0
     total: int = 0
+    session_id: str = ""
+    last_queue_key: str = ""
 
 
 _STATE_LOCK = threading.Lock()
 _STATE = _LoopState()
+_LOOP_META_KEY = "loop_controller"
 
 
 def _get_local_api_url() -> str:
@@ -89,6 +93,9 @@ def _contains_auto_loop_marker(extra_pnginfo: Any) -> bool:
     if isinstance(extra_pnginfo, dict):
         if extra_pnginfo.get("is_auto_loop") is True:
             return True
+        loop_meta = extra_pnginfo.get(_LOOP_META_KEY)
+        if isinstance(loop_meta, dict) and loop_meta.get("is_auto_loop") is True:
+            return True
         return any(_contains_auto_loop_marker(v) for v in extra_pnginfo.values())
 
     if isinstance(extra_pnginfo, (list, tuple)):
@@ -105,6 +112,49 @@ def _contains_auto_loop_marker(extra_pnginfo: Any) -> bool:
             return False
 
     return False
+
+
+def _extract_loop_meta(extra_pnginfo: Any) -> Dict[str, Any]:
+    """Extract loop metadata from extra_pnginfo in a backward-compatible way."""
+    if isinstance(extra_pnginfo, dict):
+        namespaced = extra_pnginfo.get(_LOOP_META_KEY)
+        if isinstance(namespaced, dict):
+            return namespaced
+        return extra_pnginfo if extra_pnginfo.get("is_auto_loop") is True else {}
+
+    if isinstance(extra_pnginfo, str):
+        text = extra_pnginfo.strip()
+        if not text:
+            return {}
+        try:
+            return _extract_loop_meta(json.loads(text))
+        except (TypeError, json.JSONDecodeError):
+            return {}
+
+    if isinstance(extra_pnginfo, (list, tuple)):
+        for item in extra_pnginfo:
+            found = _extract_loop_meta(item)
+            if found:
+                return found
+        return {}
+
+    return {}
+
+
+def _to_int(value: Any) -> int | None:
+    """Best-effort int conversion."""
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except ValueError:
+            return None
+    return None
 
 
 def _normalize_to_list(value: Any) -> List[Any]:
@@ -147,7 +197,8 @@ class LoopStartNode:
     RETURN_TYPES = ("INT",)
     RETURN_NAMES = ("index",)
     DESCRIPTION = (
-        "Clock engine for queue-based looping. Writes current_index and total "
+        "Clock engine for queue-based looping. Reads next_index from queued "
+        "metadata in auto-loop mode and writes current_index/total/session "
         "into shared memory for Loop Trigger."
     )
 
@@ -182,17 +233,41 @@ class LoopStartNode:
         }
 
     def run(self, total: int, start_index: int, extra_pnginfo: Any = None):
-        is_auto_loop = _contains_auto_loop_marker(extra_pnginfo)
+        loop_meta = _extract_loop_meta(extra_pnginfo)
+        is_auto_loop = bool(
+            loop_meta.get("is_auto_loop") is True
+            or _contains_auto_loop_marker(extra_pnginfo)
+        )
+        requested_index = _to_int(loop_meta.get("next_index"))
+        requested_total = _to_int(loop_meta.get("total"))
+        requested_session = loop_meta.get("session_id")
 
         with _STATE_LOCK:
-            # Manual queue click starts from user-defined position.
-            # Auto-loop queue continues by +1 each request.
             if is_auto_loop:
-                _STATE.current_index += 1
+                # Auto-loop execution must read explicit index from queued payload.
+                # This prevents same prompt re-execution from advancing multiple steps.
+                if requested_index is not None and requested_index >= 0:
+                    _STATE.current_index = requested_index
+                # Compatibility fallback for old payloads without next_index.
+                # Keep current index stable instead of mutating by side-effect.
+                elif _STATE.current_index < start_index:
+                    _STATE.current_index = start_index
+
+                if requested_total is not None and requested_total > 0:
+                    _STATE.total = requested_total
+
+                if isinstance(requested_session, str) and requested_session.strip():
+                    _STATE.session_id = requested_session.strip()
             else:
                 _STATE.current_index = start_index
+                _STATE.total = total
+                _STATE.session_id = uuid.uuid4().hex
+                _STATE.last_queue_key = ""
 
-            _STATE.total = total
+            # For auto-loop, prefer explicit total from metadata; if missing, keep
+            # latest runtime total but never overwrite with invalid values.
+            if _STATE.total <= 0:
+                _STATE.total = total
             current_index = _STATE.current_index
 
         return (current_index,)
@@ -261,8 +336,9 @@ class LoopTriggerNode:
     RETURN_TYPES = ()
     OUTPUT_NODE = True
     DESCRIPTION = (
-        "End-of-graph trigger. Re-queues the workflow until current_index + 1 "
-        "reaches total, and reports progress in the node panel."
+        "End-of-graph trigger. Re-queues until current_index + 1 reaches total "
+        "by writing explicit next_index metadata for the next queued run, and "
+        "reports progress in the node panel."
     )
 
     @classmethod
@@ -284,7 +360,15 @@ class LoopTriggerNode:
         }
 
     @staticmethod
-    def _queue_next(prompt: Dict[str, Any], client_id: str | None, extra_pnginfo: Any):
+    def _queue_next(
+        prompt: Dict[str, Any],
+        client_id: str | None,
+        extra_pnginfo: Any,
+        *,
+        next_index: int,
+        total: int,
+        session_id: str,
+    ):
         # Keep graph data untouched and only augment API payload metadata.
         next_extra_pnginfo: Dict[str, Any]
         if isinstance(extra_pnginfo, dict):
@@ -292,6 +376,12 @@ class LoopTriggerNode:
         else:
             next_extra_pnginfo = {}
         next_extra_pnginfo["is_auto_loop"] = True
+        next_extra_pnginfo[_LOOP_META_KEY] = {
+            "is_auto_loop": True,
+            "next_index": next_index,
+            "total": total,
+            "session_id": session_id,
+        }
 
         payload = {
             "prompt": copy.deepcopy(prompt),
@@ -335,6 +425,7 @@ class LoopTriggerNode:
         with _STATE_LOCK:
             current_index = _STATE.current_index
             total = _STATE.total
+            session_id = _STATE.session_id
 
         if total <= 0:
             # Defensive state guard in case start node wasn't executed.
@@ -345,6 +436,7 @@ class LoopTriggerNode:
 
         completed = current_index + 1
         should_continue = completed < total
+        next_index = current_index + 1
 
         if should_continue:
             if not isinstance(prompt, dict) or len(prompt) == 0:
@@ -352,11 +444,41 @@ class LoopTriggerNode:
                     "❌ 自动排队失败：缺少有效的 prompt 数据。 / "
                     "Auto-queue failed: missing valid prompt payload."
                 )
-            self._queue_next(
-                prompt=prompt, client_id=client_id, extra_pnginfo=extra_pnginfo
+            if not session_id:
+                raise RuntimeError(
+                    "❌ 循环会话未初始化，请手动点击 Queue 重新开始。 / "
+                    "Loop session is not initialized. Please queue manually to start."
+                )
+
+            queue_key = f"{session_id}:{current_index}->{next_index}:{total}"
+            with _STATE_LOCK:
+                if _STATE.last_queue_key == queue_key:
+                    duplicate = True
+                else:
+                    _STATE.last_queue_key = queue_key
+                    duplicate = False
+
+            if not duplicate:
+                self._queue_next(
+                    prompt=prompt,
+                    client_id=client_id,
+                    extra_pnginfo=extra_pnginfo,
+                    next_index=next_index,
+                    total=total,
+                    session_id=session_id,
+                )
+            print(
+                "[Loop-Controller] "
+                f"index={current_index} next={next_index} total={total} "
+                f"continue={should_continue} duplicate={duplicate}"
             )
             progress_text = f"Progress: {completed} / {total}"
         else:
+            print(
+                "[Loop-Controller] "
+                f"index={current_index} next={next_index} total={total} "
+                f"continue={should_continue}"
+            )
             progress_text = f"✅ Finished: {completed} / {total}"
 
         return {

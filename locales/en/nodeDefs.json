@@ -1,7 +1,7 @@
 {
   "Loop Start": {
     "display_name": "Loop Start",
-    "description": "Clock engine for queue-based looping. Writes current_index and total into shared memory for Loop Trigger.",
+    "description": "Clock engine for queue-based looping. In auto-loop mode it reads next_index from request metadata; manual Queue uses start_index. It writes current_index/total/session into shared state for Loop Trigger.",
     "inputs": {
       "total": {
         "name": "total",
@@ -41,7 +41,7 @@
   },
   "Loop Trigger": {
     "display_name": "Loop Trigger",
-    "description": "End-of-graph trigger. Re-queues the workflow until current_index + 1 reaches total, and reports progress in the node panel.",
+    "description": "End-of-graph trigger. Re-queues until current_index + 1 reaches total, writing next_index/total/session metadata for the next run; duplicate triggers in the same cycle are deduplicated. Reports progress in the node panel.",
     "inputs": {
       "any": {
         "name": "any",
