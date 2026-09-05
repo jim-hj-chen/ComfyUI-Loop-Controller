@@ -1,7 +1,7 @@
 {
   "Loop Start": {
     "display_name": "Loop Start",
-    "description": "Clock engine for queue-based looping. In auto-loop mode it reads next_index from request metadata; manual Queue uses start_index. It writes current_index/total/session into shared state for Loop Trigger.",
+    "description": "Clock engine for queue-based looping. It always reads start_index from the current prompt (rewritten by Loop Trigger before auto-queue) and writes current_index/total/session into shared state for Loop Trigger.",
     "inputs": {
       "total": {
         "name": "total",
@@ -41,7 +41,7 @@
   },
   "Loop Trigger": {
     "display_name": "Loop Trigger",
-    "description": "End-of-graph trigger. Re-queues until current_index + 1 reaches total, writing next_index/total/session metadata for the next run; duplicate triggers in the same cycle are deduplicated. Reports progress in the node panel.",
+    "description": "End-of-graph trigger. Re-queues until current_index + 1 reaches total by rewriting Loop Start.start_index in the next prompt and writing next_index/total/session metadata; duplicate triggers in the same cycle are deduplicated. Reports progress in the node panel.",
     "inputs": {
       "any": {
         "name": "any",

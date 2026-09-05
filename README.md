@@ -64,7 +64,7 @@ comfyui-loop-controller/
 - `index` (`INT`)：当前轮次序号
 
 **机制**
-- 自动排队触发：优先读取 `extra_pnginfo.loop_controller.next_index`
+- 自动排队触发：读取当前 prompt 中的 `start_index`（由 `Loop Trigger` 在上一轮入队时改写）
 - 手动点击 Queue：`current_index = start_index`
 - 同时写入共享状态：`current_index`、`total`、`session_id`
 
@@ -111,6 +111,7 @@ comfyui-loop-controller/
 - 读取共享状态中的 `current_index` 与 `total`
 - 若 `current_index + 1 < total`：
   - 构造新的请求
+  - 改写下一条 prompt 中 `Loop Start.start_index = current_index + 1`
   - 注入 `extra_data.extra_pnginfo.loop_controller`：
     - `is_auto_loop: true`
     - `next_index: current_index + 1`
@@ -158,7 +159,7 @@ comfyui-loop-controller/
 ### Q4: 为什么现在不会在一个任务里“连跳 index”了？
 
 - 旧逻辑按“执行次数”自增 index，若同一任务里节点被重复执行会出现连跳。
-- 新逻辑按“队列任务”推进：下一轮 index 由 `Loop Trigger` 显式写入 `next_index`，`Loop Start` 只读取该值，不在自动模式里做无条件 `+1`。
+- 新逻辑按“队列任务”推进：下一轮 index 由 `Loop Trigger` 在入队前直接改写下一条 prompt 的 `Loop Start.start_index`，并附带 `next_index` 元数据用于观测，不再依赖自动模式里的无条件 `+1`。
 - 因此语义和 Sequential-Batcher 一致：一轮一任务，而不是单任务内跑完整批。
 
 ---

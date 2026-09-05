@@ -197,8 +197,9 @@ class LoopStartNode:
     RETURN_TYPES = ("INT",)
     RETURN_NAMES = ("index",)
     DESCRIPTION = (
-        "Clock engine for queue-based looping. Reads next_index from queued "
-        "metadata in auto-loop mode and writes current_index/total/session "
+        "Clock engine for queue-based looping. Reads start_index from current "
+        "prompt (rewritten by Loop Trigger for auto-loop) and writes "
+        "current_index/total/session "
         "into shared memory for Loop Trigger."
     )
 
@@ -238,28 +239,19 @@ class LoopStartNode:
             loop_meta.get("is_auto_loop") is True
             or _contains_auto_loop_marker(extra_pnginfo)
         )
-        requested_index = _to_int(loop_meta.get("next_index"))
         requested_total = _to_int(loop_meta.get("total"))
         requested_session = loop_meta.get("session_id")
 
         with _STATE_LOCK:
+            # Use prompt-carried start_index as the single source of truth.
+            # Loop Trigger rewrites next prompt's start_index to next_index.
+            _STATE.current_index = start_index
             if is_auto_loop:
-                # Auto-loop execution must read explicit index from queued payload.
-                # This prevents same prompt re-execution from advancing multiple steps.
-                if requested_index is not None and requested_index >= 0:
-                    _STATE.current_index = requested_index
-                # Compatibility fallback for old payloads without next_index.
-                # Keep current index stable instead of mutating by side-effect.
-                elif _STATE.current_index < start_index:
-                    _STATE.current_index = start_index
-
                 if requested_total is not None and requested_total > 0:
                     _STATE.total = requested_total
-
                 if isinstance(requested_session, str) and requested_session.strip():
                     _STATE.session_id = requested_session.strip()
             else:
-                _STATE.current_index = start_index
                 _STATE.total = total
                 _STATE.session_id = uuid.uuid4().hex
                 _STATE.last_queue_key = ""
@@ -360,6 +352,36 @@ class LoopTriggerNode:
         }
 
     @staticmethod
+    def _inject_next_index_into_prompt(
+        prompt: Dict[str, Any], next_index: int, total: int
+    ) -> Dict[str, Any]:
+        """Rewrite Loop Start inputs so next queued run has explicit index."""
+        next_prompt = copy.deepcopy(prompt)
+        found_loop_start = False
+
+        for node_data in next_prompt.values():
+            if not isinstance(node_data, dict):
+                continue
+            if node_data.get("class_type") != "Loop Start":
+                continue
+
+            inputs = node_data.get("inputs")
+            if not isinstance(inputs, dict):
+                inputs = {}
+                node_data["inputs"] = inputs
+            inputs["start_index"] = next_index
+            inputs["total"] = total
+            found_loop_start = True
+
+        if not found_loop_start:
+            raise RuntimeError(
+                "❌ 自动排队失败：在 prompt 中未找到 Loop Start 节点，无法推进 next_index。 / "
+                "Auto-queue failed: Loop Start node not found in prompt, cannot advance next_index."
+            )
+
+        return next_prompt
+
+    @staticmethod
     def _queue_next(
         prompt: Dict[str, Any],
         client_id: str | None,
@@ -383,8 +405,12 @@ class LoopTriggerNode:
             "session_id": session_id,
         }
 
+        next_prompt = LoopTriggerNode._inject_next_index_into_prompt(
+            prompt=prompt, next_index=next_index, total=total
+        )
+
         payload = {
-            "prompt": copy.deepcopy(prompt),
+            "prompt": next_prompt,
             "client_id": client_id,
             "extra_data": {
                 "extra_pnginfo": next_extra_pnginfo
