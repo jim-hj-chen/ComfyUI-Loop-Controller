@@ -105,7 +105,7 @@ comfyui-loop-controller/
 
 **隐藏输入**
 - `prompt`：当前完整工作流数据
-- `client_id`：当前客户端 ID
+- 自动排队会复用当前浏览器的 WebSocket `client_id`，以便后续轮次继续显示节点执行高亮并刷新进度 UI
 
 **输出**
 - 无数据输出（该节点为 `OUTPUT_NODE = True`）
@@ -120,7 +120,7 @@ comfyui-loop-controller/
     - `next_index: current_index + 1`
     - `total: total`
     - `session_id: <current loop session>`
-  - POST 到 `http://127.0.0.1:8188/prompt` 自动继续排队
+  - POST 到本机 ComfyUI `/prompt`，并带上当前会话的 `client_id` 自动继续排队
 - 同一轮次的重复触发会被防重（不会重复注入下一轮）
 - 后端返回 `ui.text` 进度文本，前端在中文界面自动本地化显示：
   - 英文进行中：`Progress: x / total`

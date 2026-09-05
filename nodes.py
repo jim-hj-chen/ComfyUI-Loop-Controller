@@ -46,6 +46,7 @@ class _LoopState:
     total: int = 0
     session_id: str = ""
     last_queue_key: str = ""
+    client_id: str = ""
 
 
 _STATE_LOCK = threading.Lock()
@@ -139,6 +140,58 @@ def _extract_loop_meta(extra_pnginfo: Any) -> Dict[str, Any]:
         return {}
 
     return {}
+
+
+def _looks_like_graph_node_id(value: str) -> bool:
+    """UNIQUE_ID is typically a numeric graph node id, not a websocket client."""
+    return value.isdigit()
+
+
+def _read_prompt_server_client_id() -> str | None:
+    """Read the websocket client id attached to the currently executing prompt."""
+    try:
+        from server import PromptServer  # type: ignore
+
+        instance = getattr(PromptServer, "instance", None)
+        current = getattr(instance, "client_id", None) if instance is not None else None
+        if current:
+            return str(current)
+    except Exception:
+        return None
+    return None
+
+
+def _resolve_frontend_client_id(explicit: str | None = None) -> str | None:
+    """Pick the browser websocket id so executing/executed events reach the UI.
+
+    Hidden UNIQUE_ID must never be reused as client_id: ComfyUI would then send
+    node highlights and Loop Trigger UI updates to a non-existent socket.
+    """
+    preferred: List[str] = []
+    fallback: List[str] = []
+
+    candidates = [
+        _read_prompt_server_client_id(),
+        explicit if isinstance(explicit, str) else None,
+    ]
+    with _STATE_LOCK:
+        if _STATE.client_id:
+            candidates.append(_STATE.client_id)
+
+    for candidate in candidates:
+        if not candidate:
+            continue
+        value = str(candidate).strip()
+        if not value:
+            continue
+        if _looks_like_graph_node_id(value):
+            fallback.append(value)
+        else:
+            preferred.append(value)
+
+    if preferred:
+        return preferred[0]
+    return fallback[0] if fallback else None
 
 
 def _to_int(value: Any) -> int | None:
@@ -276,6 +329,8 @@ class LoopStartNode:
         )
         requested_total = _to_int(loop_meta.get("total"))
         requested_session = loop_meta.get("session_id")
+        requested_client = loop_meta.get("client_id")
+        live_client_id = _read_prompt_server_client_id()
 
         with _STATE_LOCK:
             # Use prompt-carried start_index as the single source of truth.
@@ -286,10 +341,16 @@ class LoopStartNode:
                     _STATE.total = requested_total
                 if isinstance(requested_session, str) and requested_session.strip():
                     _STATE.session_id = requested_session.strip()
+                if isinstance(requested_client, str) and requested_client.strip():
+                    _STATE.client_id = requested_client.strip()
             else:
                 _STATE.total = total
                 _STATE.session_id = uuid.uuid4().hex
                 _STATE.last_queue_key = ""
+                _STATE.client_id = live_client_id or ""
+
+            if live_client_id:
+                _STATE.client_id = live_client_id
 
             # For auto-loop, prefer explicit total from metadata; if missing, keep
             # latest runtime total but never overwrite with invalid values.
@@ -388,7 +449,6 @@ class LoopTriggerNode:
             },
             "hidden": {
                 "prompt": "PROMPT",
-                "client_id": "UNIQUE_ID",
                 "extra_pnginfo": "EXTRA_PNGINFO",
             },
         }
@@ -445,19 +505,22 @@ class LoopTriggerNode:
             "next_index": next_index,
             "total": total,
             "session_id": session_id,
+            "client_id": client_id or "",
         }
 
         next_prompt = LoopTriggerNode._inject_next_index_into_prompt(
             prompt=prompt, next_index=next_index, total=total
         )
 
-        payload = {
+        payload: Dict[str, Any] = {
             "prompt": next_prompt,
-            "client_id": client_id,
             "extra_data": {
                 "extra_pnginfo": next_extra_pnginfo
             },
         }
+        if client_id:
+            payload["client_id"] = client_id
+            payload["extra_data"]["client_id"] = client_id
 
         data = json.dumps(payload).encode("utf-8")
         api_url = f"{_get_local_api_url()}/prompt"
@@ -487,13 +550,23 @@ class LoopTriggerNode:
         self,
         any: Any,  # pylint: disable=unused-argument,redefined-builtin
         prompt: Dict[str, Any] | None = None,
-        client_id: str | None = None,
         extra_pnginfo: Any = None,
+        client_id: str | None = None,
     ):
+        loop_meta = _extract_loop_meta(extra_pnginfo)
+        meta_client_id = loop_meta.get("client_id")
+        resolved_client_id = _resolve_frontend_client_id(
+            client_id or (meta_client_id if isinstance(meta_client_id, str) else None)
+        )
+
         with _STATE_LOCK:
             current_index = _STATE.current_index
             total = _STATE.total
             session_id = _STATE.session_id
+            if resolved_client_id:
+                _STATE.client_id = resolved_client_id
+            elif _STATE.client_id:
+                resolved_client_id = _STATE.client_id
 
         if total <= 0:
             # Defensive state guard in case start node wasn't executed.
@@ -529,7 +602,7 @@ class LoopTriggerNode:
             if not duplicate:
                 self._queue_next(
                     prompt=prompt,
-                    client_id=client_id,
+                    client_id=resolved_client_id,
                     extra_pnginfo=extra_pnginfo,
                     next_index=next_index,
                     total=total,

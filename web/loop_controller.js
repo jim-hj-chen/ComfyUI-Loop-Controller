@@ -1,4 +1,5 @@
 import { app } from "/scripts/app.js";
+import { api } from "/scripts/api.js";
 
 const NODE_UI = {
   "Loop Start": {
@@ -256,6 +257,26 @@ function applyProgress(node, message) {
   node.onResize?.(node.size);
 }
 
+function getGraphNodeById(nodeId) {
+  if (nodeId == null || !app.graph) return null;
+  return (
+    app.graph.getNodeById?.(nodeId) ||
+    app.graph.getNodeById?.(Number(nodeId)) ||
+    null
+  );
+}
+
+function isLoopTriggerNode(node) {
+  const className = node?.comfyClass || node?.type;
+  return className === "Loop Trigger";
+}
+
+function applyExecutedOutput(detail) {
+  const node = getGraphNodeById(detail?.display_node ?? detail?.node);
+  if (!isLoopTriggerNode(node)) return;
+  applyProgress(node, detail.output || detail);
+}
+
 app.registerExtension({
   name: "comfyui.loop.controller.ui",
   beforeRegisterNodeDef(nodeType, nodeData) {
@@ -283,5 +304,10 @@ app.registerExtension({
         applyProgress(this, message);
       };
     }
+  },
+  setup() {
+    api.addEventListener("executed", (event) => {
+      applyExecutedOutput(event.detail);
+    });
   },
 });

@@ -137,5 +137,34 @@ class QueueLoopTests(unittest.TestCase):
         self.assertEqual(queue_next.call_args.kwargs["next_index"], 3)
 
 
+class FrontendClientIdTests(unittest.TestCase):
+    def setUp(self):
+        with nodes._STATE_LOCK:  # pylint: disable=protected-access
+            nodes._STATE = nodes._LoopState()  # pylint: disable=protected-access
+
+    def test_prefers_websocket_id_over_numeric_node_id(self):
+        with mock.patch.object(
+            nodes, "_read_prompt_server_client_id", return_value="ws-client-uuid"
+        ):
+            self.assertEqual(
+                nodes._resolve_frontend_client_id("12"),  # pylint: disable=protected-access
+                "ws-client-uuid",
+            )
+
+    def test_queue_payload_includes_client_id(self):
+        start = nodes.LoopStartNode()
+        trigger = nodes.LoopTriggerNode()
+        prompt = QueueLoopTests._prompt()
+
+        with mock.patch.object(
+            nodes, "_read_prompt_server_client_id", return_value="ws-client-uuid"
+        ):
+            start.run(total=2, start_index=0)
+            with mock.patch.object(nodes.LoopTriggerNode, "_queue_next") as queue_next:
+                trigger.trigger(None, prompt=prompt, client_id="12")
+
+        self.assertEqual(queue_next.call_args.kwargs["client_id"], "ws-client-uuid")
+
+
 if __name__ == "__main__":
     unittest.main()
