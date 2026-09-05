@@ -189,6 +189,41 @@ def _normalize_to_list(value: Any) -> List[Any]:
     return [value]
 
 
+def _unwrap_single_index(value: Any) -> int:
+    """Unwrap the index list supplied when INPUT_IS_LIST is enabled."""
+    if isinstance(value, (list, tuple)):
+        if len(value) != 1:
+            raise ValueError(
+                "❌ 循环索引必须是单个值。 / Loop index must contain exactly one value."
+            )
+        value = value[0]
+
+    index = _to_int(value)
+    if index is None:
+        raise TypeError(
+            "❌ 循环索引必须是整数。 / Loop index must be an integer."
+        )
+    return index
+
+
+def _normalize_list_input(value: Any) -> List[Any]:
+    """Normalize a whole-list input without reintroducing ComfyUI fan-out.
+
+    With INPUT_IS_LIST enabled, scalar inputs arrive in a one-element wrapper.
+    A real list output, however, arrives as the complete list. Unwrap only
+    containers that unambiguously represent one wrapped list-like value.
+    """
+    if isinstance(value, (list, tuple)):
+        values = list(value)
+        if len(values) == 1 and isinstance(values[0], (list, tuple)):
+            return _normalize_to_list(values[0])
+        if len(values) == 1 and isinstance(values[0], str):
+            return _normalize_to_list(values[0])
+        return values
+
+    return _normalize_to_list(value)
+
+
 class LoopStartNode:
     """Loop head node: clock engine for queue-driven loop progress."""
 
@@ -264,6 +299,11 @@ class LoopStartNode:
 
         return (current_index,)
 
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):  # pylint: disable=unused-argument
+        # Each queued prompt represents a distinct loop iteration.
+        return time.time()
+
 
 class ListItemExtractorNode:
     """Fail-fast extractor node for any list-like workflow input."""
@@ -272,6 +312,7 @@ class ListItemExtractorNode:
     FUNCTION = "extract"
     RETURN_TYPES = (ANY,)
     RETURN_NAMES = ("item",)
+    INPUT_IS_LIST = True
     DESCRIPTION = (
         "Extracts one item from a list by index. Raises immediately on empty "
         "lists or out-of-range indexes."
@@ -300,24 +341,25 @@ class ListItemExtractorNode:
             }
         }
 
-    def extract(self, index: int, list: Any):  # pylint: disable=redefined-builtin
-        items = _normalize_to_list(list)
+    def extract(self, index: Any, list: Any):  # pylint: disable=redefined-builtin
+        current_index = _unwrap_single_index(index)
+        items = _normalize_list_input(list)
 
         if len(items) == 0:
             raise ValueError(
                 "❌ 列表为空，无法提取数据。 / List is empty, cannot extract any item."
             )
 
-        if index >= len(items):
+        if current_index < 0 or current_index >= len(items):
             raise IndexError(
                 "❌ 索引越界！要求获取第 {idx} 个，但列表总共只有 {size} 个。 / "
                 "Index out of range: requested #{idx}, but list has only {size} item(s).".format(
-                    idx=index,
+                    idx=current_index,
                     size=len(items),
                 )
             )
 
-        return (items[index],)
+        return (items[current_index],)
 
 
 class LoopTriggerNode:

@@ -21,7 +21,7 @@
   },
   "List Item Extractor": {
     "display_name": "List Item Extractor",
-    "description": "Extracts one item from a list by index. Raises immediately on empty lists or out-of-range indexes.",
+    "description": "Consumes the complete list once and outputs only the indexed item, preventing implicit batching within one task. Raises immediately on empty lists or out-of-range indexes.",
     "inputs": {
       "index": {
         "name": "index",

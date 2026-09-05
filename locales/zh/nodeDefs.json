@@ -21,7 +21,7 @@
   },
   "List Item Extractor": {
     "display_name": "列表项提取器",
-    "description": "按序号从列表中提取一项。列表为空或索引越界时立即报错中断。",
+    "description": "一次接收完整列表，并按序号只输出一项，避免同一任务内的隐式批处理。列表为空或索引越界时立即报错中断。",
     "inputs": {
       "index": {
         "name": "序号",
